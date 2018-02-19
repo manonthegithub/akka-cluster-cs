@@ -5,7 +5,7 @@ import java.util.UUID
 import akka.actor.{Actor, ActorSystem, Props, Timers}
 import akka.cluster.Cluster
 import akka.event.LoggingReceive
-import com.manonthegithub.akka.cs.RemoteClientServer.{ClientServerProtocol, Settings}
+import com.manonthegithub.akka.cs.RemoteClientServer.{ForwardingEnvelope, Settings}
 import com.typesafe.config.ConfigFactory
 
 import scala.util.Properties
@@ -69,7 +69,7 @@ object Runner extends App {
 
   val clientServerPairKey = "someRandomKey"
 
-  trait SomeProto extends ClientServerProtocol
+  trait SomeProto
 
   case class Hello(reply: String, correlation: Option[UUID] = Some(UUID.randomUUID())) extends SomeProto
 
@@ -77,7 +77,7 @@ object Runner extends App {
 
   import scala.concurrent.duration._
 
-  val proto = new RemoteClientServer[SomeProto](clientServerPairKey, new Settings(10.seconds))
+  val proto = new RemoteClientServer(clientServerPairKey, new Settings(10.seconds))
 
   if (isServer) {
     val echo = sys.actorOf(Props(new Actor {
@@ -106,7 +106,7 @@ object Runner extends App {
 
       override def receive: Receive = {
         case Send =>
-          client ! SayHello("hi!")
+          client ! ForwardingEnvelope(SayHello("hi!"), "111")
           timers.startSingleTimer(Send, Send, 1.second)
         case other => println(other)
       }

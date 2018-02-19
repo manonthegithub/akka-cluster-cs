@@ -5,7 +5,7 @@ import java.util.UUID
 import akka.actor.{Actor, ActorSystem, Address, Props}
 import akka.cluster.Cluster
 import akka.testkit.TestKit
-import com.manonthegithub.akka.cs.RemoteClientServer.{ClientServerProtocol, Settings}
+import com.manonthegithub.akka.cs.RemoteClientServer.Settings
 import com.typesafe.config.{Config, ConfigFactory}
 import org.scalatest.{Matchers, WordSpecLike}
 
@@ -48,7 +48,7 @@ class RemoteClientServerSpec extends TestKit(new ClusterInitialization {
         }
       }))
 
-      val serv = new RemoteClientServer[ClientServerProtocol]("k", new Settings(1.second)).server(a)
+      val serv = new RemoteClientServer("k", new Settings(1.second)).server(a)
 
       system.stop(a)
 
@@ -64,9 +64,9 @@ class RemoteClientServerSpec extends TestKit(new ClusterInitialization {
   }
 
 
-  case class SayHi(correlation: Option[UUID] = Some(UUID.randomUUID())) extends ClientServerProtocol
+  case class SayHi(correlation: Option[UUID] = Some(UUID.randomUUID()))
 
-  case class Hi(correlation: Option[Any]) extends ClientServerProtocol
+  case class Hi(correlation: Option[Any])
 
 
 }

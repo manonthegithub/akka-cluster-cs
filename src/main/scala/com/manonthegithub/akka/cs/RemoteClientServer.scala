@@ -15,14 +15,15 @@ import scala.concurrent.duration.FiniteDuration
 class RemoteClientServer(val key: String, settings: Settings)(implicit val fact: ActorRefFactory) {
 
   import RemoteClientServer._
+  import settings._
 
   private val ServersKey: ServerSetKey = ORSetKey[ActorRef](key)
 
   def client(pickServer: immutable.Set[ActorRef] => immutable.Set[ActorRef]): ActorRef =
-    fact.actorOf(Props(new RemoteClientActor(ServersKey, pickServer, settings)))
+    fact.actorOf(Props(new RemoteClientActor(ServersKey, pickServer, writeConsistency)))
 
   def server(logic: ActorRef): ActorRef =
-    fact.actorOf(Props(new RemoteServerActor(ServersKey, logic, settings)))
+    fact.actorOf(Props(new RemoteServerActor(ServersKey, logic, writeConsistency)))
 
 }
 
@@ -37,9 +38,7 @@ object RemoteClientServer {
   type ServerSetKey = ORSetKey[ActorRef]
 
 
-  private class RemoteServerActor(private val Key: ServerSetKey, private val recipient: ActorRef, settings: Settings) extends Actor {
-
-    import settings._
+  private class RemoteServerActor(private val Key: ServerSetKey, private val recipient: ActorRef, writeConsistency: WriteConsistency) extends Actor {
 
     private implicit val cluster = Cluster(context.system)
     private val replicator = DistributedData(context.system).replicator
@@ -88,9 +87,7 @@ object RemoteClientServer {
 
   }
 
-  private class RemoteClientActor(private val Key: ServerSetKey, private val pickRecipients: immutable.Set[ActorRef] => immutable.Set[ActorRef], settings: Settings) extends Actor {
-
-    import settings._
+  private class RemoteClientActor(private val Key: ServerSetKey, private val pickRecipients: immutable.Set[ActorRef] => immutable.Set[ActorRef], writeConsistency: WriteConsistency) extends Actor {
 
     private implicit val cluster = Cluster(context.system)
 
@@ -129,8 +126,8 @@ object RemoteClientServer {
 
   }
 
-  class Settings(timeout: FiniteDuration) {
-    val writeConsistency = WriteMajority(timeout)
+  class Settings(writeTimeout: FiniteDuration) {
+    val writeConsistency = WriteMajority(writeTimeout)
   }
 
 }
