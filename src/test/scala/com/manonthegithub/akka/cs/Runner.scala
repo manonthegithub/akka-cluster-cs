@@ -62,7 +62,7 @@ object Runner extends App {
        |}
     """.stripMargin
 
-  implicit val sys = ActorSystem(
+  val sys = ActorSystem(
     sysName,
     config = ConfigFactory.parseString(configString).withFallback(ConfigFactory.load())
   )
@@ -88,7 +88,7 @@ object Runner extends App {
 
     }))
 
-    proto.server(echo)
+    proto.server(echo)(sys)
 
   } else {
 
@@ -96,7 +96,7 @@ object Runner extends App {
 
     sys.actorOf(Props(new Actor with Timers {
 
-      private val client = proto.client(s => s)
+      private val client = proto.client()
 
       case object Send
 

@@ -1,40 +1,46 @@
 package com.manonthegithub.akka.cs
 
-import java.util.UUID
-
-import akka.actor.{Actor, ActorSystem, Address, Props}
+import akka.actor.{Actor, Props}
 import akka.cluster.Cluster
-import akka.testkit.TestKit
-import com.manonthegithub.akka.cs.RemoteClientServer.Settings
-import com.typesafe.config.{Config, ConfigFactory}
-import org.scalatest.{Matchers, WordSpecLike}
+import akka.testkit.{ImplicitSender, TestKit}
+import com.manonthegithub.akka.cs.RemoteClientServer.{ForwardingEnvelope, NoRegisteredRecipients, Settings}
+import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 
-object Conf {
+import scala.concurrent.{Await, ExecutionContext, Promise}
 
-  val sysName = "remotecs"
-
-}
-
-class RemoteClientServerSpec extends TestKit(new ClusterInitialization {
-  override def systemName: String = Conf.sysName
+class RemoteClientServerSpec extends TestKit(new MasterNode {
 
   override def port: Int = 2552
 
-  override def joinPort: Int = 0
-}.ClusterSystem) with WordSpecLike with Matchers {
+}.system) with WordSpecLike with Matchers with BeforeAndAfterAll with ImplicitSender {
 
   import scala.concurrent.duration._
 
+  val allUpTimeout = 10.seconds
 
-  val clu2 = new ClusterInitialization {
+  val defaultSettings = new Settings(1.second)
 
-    override def role: String = "not-master"
 
-    override def systemName: String = Conf.sysName
+  val slave = new SlaveNode {
 
     override def port: Int = 2553
 
     override def joinPort: Int = 2552
+
+  }
+
+  override def beforeAll(): Unit = {
+    val masterUp = Promise[Unit]
+    val slaveUp = Promise[Unit]
+
+    Cluster(system).registerOnMemberUp(masterUp.success(()))
+    Cluster(slave.system).registerOnMemberUp(slaveUp.success(()))
+    implicit val ec = ExecutionContext.Implicits.global
+    val allup = for {
+      _ <- masterUp.future
+      _ <- slaveUp.future
+    } yield ()
+    Await.result(allup, allUpTimeout)
   }
 
 
@@ -48,7 +54,7 @@ class RemoteClientServerSpec extends TestKit(new ClusterInitialization {
         }
       }))
 
-      val serv = new RemoteClientServer("k", new Settings(1.second)).server(a)
+      val serv = new RemoteClientServer("k", defaultSettings).server(a)
 
       system.stop(a)
 
@@ -60,68 +66,47 @@ class RemoteClientServerSpec extends TestKit(new ClusterInitialization {
 
     }
 
+    "respond with NoRegisteredRecipients" in {
 
-  }
+      val cs = new RemoteClientServer("k", defaultSettings)
 
+      cs.client()(system) ! ForwardingEnvelope("err", "cid")
 
-  case class SayHi(correlation: Option[UUID] = Some(UUID.randomUUID()))
+      expectMsg(NoRegisteredRecipients("cid"))
 
-  case class Hi(correlation: Option[Any])
-
-
-}
-
-
-trait ClusterInitialization {
-
-  def systemName: String
-
-  def port: Int
-
-  def joinPort: Int
-
-  def role: String = "master"
-
-
-  final lazy val ClusterSystem = {
-
-    val s = ActorSystem(systemName, appConfig)
-
-    val clu = Cluster(s)
-    if (role == "master") {
-      clu.join(clu.selfAddress)
-    } else {
-      clu.joinSeedNodes(List(Address("tcp", systemName, "127.0.0.1", joinPort)))
-    }
-    //after we left the cluster we want to stop the process, so System should be terminated
-    clu.registerOnMemberRemoved {
-      s.terminate()
     }
 
-    s
+    "send message from client to server from different nodes" in {
+
+      val cs = new RemoteClientServer("k", defaultSettings)
+
+      val client = cs.client()(system)
+      val server = cs.server(testActor)(slave.system)
+
+      val message = ForwardingEnvelope("Hello", "1")
+
+      awaitAssert {
+        client ! message
+        expectMsg(message)
+      }
+
+      slave.system.stop(server)
+
+
+      awaitAssert {
+        client ! message
+        expectMsg(100.millis, NoRegisteredRecipients("1"))
+      }
+
+    }
+
+
   }
 
-  private lazy val appConfig: Config = {
-
-    val clusterConf = ConfigFactory.parseString(
-      s"""
-         |akka {
-         |
-         |  actor {
-         |    provider = "cluster"
-         |  }
-         |
-         |  remote {
-         |    netty.tcp {
-         |      hostname = "127.0.0.1"
-         |      port = $port
-         |    }
-         |  }
-         |}
-        """.stripMargin
-    )
-
-    clusterConf.withFallback(ConfigFactory.defaultReference())
+  override def afterAll(): Unit = {
+    Cluster(system).leave(Cluster(slave.system).selfAddress)
+    Cluster(system).leave(Cluster(system).selfAddress)
   }
+
 
 }

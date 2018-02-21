@@ -10,20 +10,20 @@ import com.manonthegithub.akka.cs.RemoteClientServer.Settings
 
 import scala.collection.immutable
 import scala.concurrent.duration.FiniteDuration
+import scala.util.Random
 
 
-class RemoteClientServer(val key: String, settings: Settings)(implicit val fact: ActorRefFactory) {
+class RemoteClientServer(key: String, val settings: Settings) {
 
   import RemoteClientServer._
-  import settings._
 
   private val ServersKey: ServerSetKey = ORSetKey[ActorRef](key)
 
-  def client(pickServer: immutable.Set[ActorRef] => immutable.Set[ActorRef]): ActorRef =
-    fact.actorOf(Props(new RemoteClientActor(ServersKey, pickServer, writeConsistency)))
+  def client(picker: ServerPicker = new DynamicRoundRobinPicker)(implicit fact: ActorRefFactory): ActorRef =
+    fact.actorOf(Props(new RemoteClientActor(ServersKey, picker, settings.writeConsistency)))
 
-  def server(logic: ActorRef): ActorRef =
-    fact.actorOf(Props(new RemoteServerActor(ServersKey, logic, writeConsistency)))
+  def server(logic: ActorRef)(implicit fact: ActorRefFactory): ActorRef =
+    fact.actorOf(Props(new RemoteServerActor(ServersKey, logic, settings.writeConsistency)))
 
 }
 
@@ -34,22 +34,60 @@ object RemoteClientServer {
 
   case class NoRegisteredRecipients(correlationId: String)
 
-  type ServersSet = ORSet[ActorRef]
-  type ServerSetKey = ORSetKey[ActorRef]
+  trait ServerPicker {
 
+    /**
+     * @param availableServers must be nonempty
+     */
+    def pick(availableServers: Vector[ActorRef]): immutable.Set[ActorRef]
+
+  }
+
+  object RandomPicker extends ServerPicker {
+    override def pick(availableServers: Vector[ActorRef]): immutable.Set[ActorRef] =
+      Set(availableServers(Random.nextInt(availableServers.size)))
+  }
+
+  object AllServersPicker extends ServerPicker {
+    override def pick(availableServers: Vector[ActorRef]): Set[ActorRef] = availableServers.toSet
+  }
+
+  object FirstSeverPicker extends ServerPicker {
+    override def pick(availableServers: Vector[ActorRef]): Set[ActorRef] = Set(availableServers.head)
+  }
+
+  class DynamicRoundRobinPicker extends ServerPicker {
+
+    private var index = 0
+
+    override def pick(availableServers: Vector[ActorRef]): Set[ActorRef] = {
+      if (index < availableServers.size) {
+        val r = Set(availableServers(index))
+        index += 1
+        r
+      } else {
+        index = 0
+        Set(availableServers(index))
+      }
+    }
+
+  }
+
+  private type ServersSet = ORSet[ActorRef]
+  private type ServerSetKey = ORSetKey[ActorRef]
+
+  private case object Register
+
+  private case object Registered
+
+  private case object Deregister
+
+  private case object Deregistered
 
   private class RemoteServerActor(private val Key: ServerSetKey, private val recipient: ActorRef, writeConsistency: WriteConsistency) extends Actor {
 
     private implicit val cluster = Cluster(context.system)
     private val replicator = DistributedData(context.system).replicator
-
-    private case object Register
-
-    private case object Registered
-
-    private case object Deregister
-
-    private case object Deregistered
 
     private def tryRegister(ref: ActorRef) =
       replicator ! Update(Key, ORSet.empty[ActorRef], writeConsistency, Some(Register))(_ + ref)
@@ -87,13 +125,16 @@ object RemoteClientServer {
 
   }
 
-  private class RemoteClientActor(private val Key: ServerSetKey, private val pickRecipients: immutable.Set[ActorRef] => immutable.Set[ActorRef], writeConsistency: WriteConsistency) extends Actor {
+  private class RemoteClientActor(private val Key: ServerSetKey, private val serverPicker: ServerPicker, writeConsistency: WriteConsistency) extends Actor {
 
     private implicit val cluster = Cluster(context.system)
 
     private val replicator = DistributedData(context.system).replicator
 
-    private var servers: immutable.Set[ActorRef] = Set.empty
+    /**
+     * Vector is needed to guarantee ordering and fast access by index
+     */
+    private var servers: Vector[ActorRef] = Vector.empty
 
     private def subscribe = DistributedData(context.system).replicator ! Subscribe(Key, self)
 
@@ -107,10 +148,10 @@ object RemoteClientServer {
 
     override def receive = LoggingReceive {
       case m: ForwardingEnvelope =>
-        if (servers.nonEmpty) pickRecipients(servers).foreach(_ forward m)
+        if (servers.nonEmpty) serverPicker.pick(servers).foreach(_ forward m)
         else sender ! NoRegisteredRecipients(m.correlationId)
       case c@Changed(Key) =>
-        val newState = c.get(Key).elements
+        val newState = c.get(Key).elements.toVector.sorted
         val newToWatch = newState.diff(servers)
         servers = newState
         newToWatch.foreach(context.watch)
