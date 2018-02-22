@@ -30,9 +30,9 @@ class RemoteClientServer(key: String, val settings: Settings) {
 
 object RemoteClientServer {
 
-  case class ForwardingEnvelope(message: Any, correlationId: String)
+  case class ForwardingEnvelope(message: Any, correlation: Option[Any] = None)
 
-  case class NoRegisteredRecipients(correlationId: String)
+  case class NoRegisteredRecipients(correlation: Option[Any])
 
   trait ServerPicker {
 
@@ -149,7 +149,7 @@ object RemoteClientServer {
     override def receive = LoggingReceive {
       case m: ForwardingEnvelope =>
         if (servers.nonEmpty) serverPicker.pick(servers).foreach(_ forward m)
-        else sender ! NoRegisteredRecipients(m.correlationId)
+        else sender ! NoRegisteredRecipients(m.correlation)
       case c@Changed(Key) =>
         val newState = c.get(Key).elements.toVector.sorted
         val newToWatch = newState.diff(servers)
